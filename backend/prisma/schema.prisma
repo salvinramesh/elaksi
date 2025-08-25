@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Collection {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  products  Product[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Product {
+  id           String         @id @default(cuid())
+  name         String
+  slug         String         @unique
+  description  String
+  price        Int
+  compareAt    Int?
+  imageUrl     String?
+  inventory    Int            @default(0)
+  tagsCsv      String?
+  collection   Collection?    @relation(fields: [collectionId], references: [id])
+  collectionId String?
+  images       ProductImage[]
+  orderItems   OrderItem[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+}
+
+model ProductImage {
+  id        String   @id @default(cuid())
+  url       String
+  position  Int      @default(0)
+  // Add onDelete: Cascade so images auto-remove if product is deleted (optional but recommended)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId, position])
+}
+
+/* ===========================
+   Users & Addresses
+   =========================== */
+
+model User {
+  id           String     @id @default(cuid())
+  name         String
+  email        String     @unique
+  phone        String?    @db.VarChar(20)
+  passwordHash String
+  addresses    Address[]
+  orders       Order[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model Address {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  fullName  String
+  phone     String   @db.VarChar(20)
+  line1     String
+  line2     String?
+  city      String
+  state     String
+  pincode   String   @db.VarChar(10)
+  country   String   @default("India")
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, isDefault])
+}
+
+/* ===========================
+   Orders & Tracking
+   =========================== */
+
+enum OrderStatus {
+  PLACED
+  PAID
+  SHIPPED
+  DELIVERED
+}
+
+model Order {
+  id                 String       @id @default(cuid())
+  user               User?        @relation(fields: [userId], references: [id])
+  userId             String?
+  email              String
+  phone              String
+  address            String
+  total              Int
+  items              OrderItem[]
+
+  // Payment/tracking
+  status            OrderStatus @default(PLACED)
+  paymentStatus     String      @default("pending")
+  razorpayOrderId   String?     @unique
+  razorpayPaymentId String?
+  razorpaySignature String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  order     Order   @relation(fields: [orderId], references: [id])
+  orderId   String
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+  quantity  Int
+  price     Int
+}
