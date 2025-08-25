@@ -47,9 +47,9 @@ model ProductImage {
   @@index([productId, position])
 }
 
-/* ===========================
-   Users & Addresses
-   =========================== */
+// ===========================
+//   Users & Addresses
+// ===========================
 
 model User {
   id           String     @id @default(cuid())
@@ -82,9 +82,9 @@ model Address {
   @@index([userId, isDefault])
 }
 
-/* ===========================
-   Orders & Tracking
-   =========================== */
+// ===========================
+//   Orders & Tracking
+// ===========================
 
 enum OrderStatus {
   PLACED
