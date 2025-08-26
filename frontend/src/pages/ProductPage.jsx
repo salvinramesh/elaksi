@@ -1,7 +1,7 @@
+// src/pages/ProductPage.jsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { INR } from '../utils';
-import { checkoutItems } from '../lib/checkout';
 import { getToken } from '../auth';
 
 const CART_KEY = 'elaksi_cart';
@@ -23,7 +23,6 @@ const PLACEHOLDER =
 export default function ProductPage() {
   const { slug } = useParams();
   const navigate = useNavigate();
-
   const [p, setP] = useState(null);
   const [qty, setQty] = useState(1);
   const [active, setActive] = useState(0);
@@ -55,15 +54,7 @@ export default function ProductPage() {
     const ex = cart.find(i => i.id === p.id);
     const q = Number(qty) || 1;
     if (ex) ex.qty = (ex.qty || 1) + q;
-    else
-      cart.push({
-        id: p.id,
-        slug: p.slug,
-        name: p.name,
-        qty: q,
-        price: p.price,
-        imageUrl: images[0] || PLACEHOLDER,
-      });
+    else cart.push({ id: p.id, slug: p.slug, name: p.name, qty: q, price: p.price, imageUrl: images[0] || PLACEHOLDER });
     localStorage.setItem(CART_KEY, JSON.stringify(cart));
     window.dispatchEvent(new Event('cart:update'));
     sessionStorage.setItem(SESSION_OPEN_FLAG, '1');
@@ -71,36 +62,91 @@ export default function ProductPage() {
   }
 
   async function buyNow() {
-    if (!p || outOfStock) return;
-
-    // Require login for checkout
-    if (!getToken()) {
-      alert('Please log in to purchase.');
-      navigate('/login');
-      return;
-    }
-
     try {
-      const orderItems = [{ productId: p.id, quantity: Number(qty) || 1 }];
+      if (!p || outOfStock) return;
 
-      await checkoutItems({
-        items: orderItems,
-        // You can pass email/phone/address if you have from account:
-        // email, phone, address,
-        onPaid: async (orderId) => {
-          // Clear any local cart traces (even though this is Buy Now)
-          localStorage.setItem(CART_KEY, '[]');
-          sessionStorage.setItem(SESSION_CLEAR_FLAG, '1');
-          window.dispatchEvent(new Event('cart:update'));
+      // Require login for purchase
+      const token = getToken();
+      if (!token) {
+        alert('Please log in to purchase.');
+        navigate('/login');
+        return;
+      }
 
-          alert('Payment success!');
-          // Navigate to order details (uncomment if you want)
-          // navigate(`/order/${orderId}`);
-        },
+      // Create order
+      const body = {
+        items: [{ productId: p.id, quantity: Number(qty) || 1 }],
+      };
+      const res = await fetch('/api/checkout/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
       });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        console.error('Order create failed:', data);
+        alert(data?.error || 'Failed to start payment');
+        return;
+      }
+
+      // ensure Razorpay
+      if (!window.Razorpay) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = 'https://checkout.razorpay.com/v1/checkout.js';
+          s.onload = resolve; s.onerror = reject;
+          document.head.appendChild(s);
+        });
+      }
+
+      const rzp = new window.Razorpay({
+        key: data.keyId,
+        amount: data.amount,
+        currency: 'INR',
+        name: 'ELAKSI ATELIER',
+        description: p.name,
+        order_id: data.razorpayOrderId,
+        prefill: {},
+        theme: { color: '#f59e0b' },
+        handler: async (response) => {
+          try {
+            const verify = await fetch('/api/checkout/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_signature: response.razorpay_signature,
+              }),
+            });
+            const vr = await verify.json();
+            if (verify.ok && vr.ok) {
+              // clear local cart just in case
+              localStorage.setItem(CART_KEY, '[]');
+              sessionStorage.setItem(SESSION_CLEAR_FLAG, '1');
+              window.dispatchEvent(new Event('cart:update'));
+              // go to order page
+              navigate(`/order/${vr.orderId}`);
+            } else {
+              console.error('Verify failed:', vr);
+              alert(vr?.error || 'Payment verification failed');
+            }
+          } catch (e) {
+            console.error('Verify exception:', e);
+            alert('Payment verification failed');
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            console.log('Razorpay modal closed');
+          }
+        }
+      });
+
+      rzp.open();
     } catch (e) {
-      console.error('Buy Now failed:', e);
-      alert(e?.message || 'Checkout failed');
+      console.error('buyNow exception:', e);
+      alert('Payment could not be started');
     }
   }
 
@@ -120,9 +166,7 @@ export default function ProductPage() {
             <img
               src={images[active] || PLACEHOLDER}
               className="h-full w-full object-cover"
-              onError={(e) => {
-                e.currentTarget.src = PLACEHOLDER;
-              }}
+              onError={(e)=>{ e.currentTarget.src = PLACEHOLDER; }}
               alt={p.name}
             />
           </div>
@@ -131,12 +175,9 @@ export default function ProductPage() {
               {images.map((u, i) => (
                 <button
                   key={i}
-                  className={
-                    'aspect-square rounded-lg overflow-hidden border ' +
-                    (i === active ? 'ring-2 ring-amber-500' : '')
-                  }
-                  onClick={() => setActive(i)}
-                  aria-label={`View image ${i + 1}`}
+                  className={'aspect-square rounded-lg overflow-hidden border ' + (i===active?'ring-2 ring-amber-500':'')}
+                  onClick={()=>setActive(i)}
+                  aria-label={`View image ${i+1}`}
                 >
                   <img src={u} className="h-full w-full object-cover" alt="" />
                 </button>
@@ -149,10 +190,9 @@ export default function ProductPage() {
           <h1 className="text-2xl font-semibold">{p.name}</h1>
           <p className="mt-1 text-stone-600">{p.description}</p>
           <div className="mt-3 flex items-baseline gap-3">
-            <span className="text-2xl font-bold">{INR.format((p.price || 0) / 100)}</span>
-            {!!p.compareAt && p.compareAt > p.price && (
-              <span className="text-stone-500 line-through">{INR.format(p.compareAt / 100)}</span>
-            )}
+            <span className="text-2xl font-bold">{INR.format(((p.price||0)/100))}</span>
+            {!!p.compareAt && p.compareAt > p.price &&
+              <span className="text-stone-500 line-through">{INR.format(p.compareAt/100)}</span>}
           </div>
 
           <div className="mt-4 flex items-center gap-3">
@@ -161,7 +201,7 @@ export default function ProductPage() {
               className="input w-24"
               value={qty}
               min={1}
-              onChange={(e) => setQty(Math.max(1, parseInt(e.target.value || '1', 10)))}
+              onChange={(e)=>setQty(Math.max(1, parseInt(e.target.value||'1',10)))}
               disabled={outOfStock}
             />
             <button className="btn btn-primary" onClick={addToCart} disabled={outOfStock}>

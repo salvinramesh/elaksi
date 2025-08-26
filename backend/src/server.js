@@ -605,16 +605,12 @@ app.post("/api/checkout/verify", async (req, res) => {
 app.get("/api/orders/:id", async (req, res) => {
   const o = await prisma.order.findUnique({
     where: { id: req.params.id },
-    include: {
-      items: {
-        include: { product: true },
-      },
-      user: true,
-    },
+    include: { items: { include: { product: true } } },
   });
   if (!o) return res.status(404).json({ error: "Not found" });
   res.json(o);
 });
+
 
 // User’s own orders list
 app.get("/api/orders", requireAuth, async (req, res) => {
