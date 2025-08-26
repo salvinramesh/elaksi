@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { INR } from "../utils";
 import { checkoutItems, mapCartToOrderItems } from "../lib/checkout";
+import { getToken } from "../auth"; // <-- use the same auth helper used elsewhere
 
 export default function CartDrawer({ open, onClose, items, setItems /* onCheckout (optional) */ }) {
   const navigate = useNavigate();
@@ -23,12 +24,28 @@ export default function CartDrawer({ open, onClose, items, setItems /* onCheckou
     setItems((list) => list.map((i) => (i.id === id ? { ...i, qty: q } : i)));
   }
 
+  const token =
+    (typeof getToken === "function" && getToken()) ||
+    (typeof window !== "undefined" && localStorage.getItem("elaksi_token")) ||
+    "";
+
+  const isLoggedIn = !!token;
+
   async function handleCheckout() {
     setErr("");
+
+    if (!isLoggedIn) {
+      // Soft-redirect to login before checkout
+      onClose?.();
+      navigate("/login", { state: { from: "/cart" } });
+      return;
+    }
+
     if (orderItems.length === 0) {
       setErr("Your cart has no valid items to checkout.");
       return;
     }
+
     try {
       setBusy(true);
       await checkoutItems({
@@ -99,6 +116,12 @@ export default function CartDrawer({ open, onClose, items, setItems /* onCheckou
             ))
           )}
 
+          {!isLoggedIn && safeItems.length > 0 && (
+            <div className="text-sm text-amber-700">
+              Please <button className="underline" onClick={() => { onClose?.(); navigate("/login", { state: { from: "/cart" } }); }}>log in</button> to continue to checkout.
+            </div>
+          )}
+
           {err && <div className="text-sm text-red-600">{err}</div>}
         </div>
 
@@ -110,7 +133,7 @@ export default function CartDrawer({ open, onClose, items, setItems /* onCheckou
           <button
             className="btn btn-primary w-full"
             onClick={handleCheckout}
-            disabled={safeItems.length === 0 || busy}
+            disabled={safeItems.length === 0 || busy /* frontend disables when not logged in handled in click */}
           >
             {busy ? "Processing…" : "Checkout"}
           </button>

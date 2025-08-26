@@ -1,6 +1,8 @@
 // src/lib/checkout.js
 // Order creation → (auto-load Razorpay SDK) → Razorpay modal → backend verify
 
+import { getToken } from "../auth"; // <-- pull bearer token to authorize order creation
+
 let rzpLoadPromise = null;
 
 async function ensureRazorpayLoaded() {
@@ -43,10 +45,18 @@ export async function checkoutItems({
     throw new Error("Your cart is empty.");
   }
 
+  const token =
+    (typeof getToken === "function" && getToken()) ||
+    (typeof window !== "undefined" && localStorage.getItem("elaksi_token")) ||
+    "";
+
   // 1) Create order on backend (validates stock & totals)
   const r = await fetch("/api/checkout/order", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}), // <-- include bearer
+    },
     body: JSON.stringify({ items, email, phone, address }),
   });
 

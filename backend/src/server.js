@@ -463,10 +463,8 @@ app.get("/api/razorpay/key", (_req, res) => {
   res.json({ ok: true, keyId: process.env.RAZORPAY_KEY_ID });
 });
 
-/* ---------------------------
-   Orders & Checkout
----------------------------- */
-app.post("/api/checkout/order", async (req, res) => {
+// Orders & Checkout
+app.post("/api/checkout/order", requireAuth, async (req, res) => {
   try {
     if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
       return res.status(500).json({ ok: false, error: "Razorpay keys not configured" });
@@ -477,19 +475,14 @@ app.post("/api/checkout/order", async (req, res) => {
       return res.status(400).json({ ok: false, error: "No items" });
     }
 
-    const uid = tryGetUserId(req);
-
     const idsOrSlugs = items.map((i) => String(i.productId));
     const products = await prisma.product.findMany({
-      where: {
-        OR: [{ id: { in: idsOrSlugs } }, { slug: { in: idsOrSlugs } }],
-      },
+      where: { OR: [{ id: { in: idsOrSlugs } }, { slug: { in: idsOrSlugs } }] },
     });
 
     let total = 0;
     for (const it of items) {
-      const key = String(it.productId);
-      const p = products.find((x) => x.id === key || x.slug === key);
+      const p = products.find((x) => x.id === it.productId || x.slug === it.productId);
       if (!p) return res.status(400).json({ ok: false, error: "Invalid product" });
       const qty = Number(it.quantity || 1);
       if (p.inventory < qty) {
@@ -504,7 +497,7 @@ app.post("/api/checkout/order", async (req, res) => {
 
     const order = await prisma.order.create({
       data: {
-        userId: uid || null,
+        userId: req.userId, // ✅ enforced
         email: String(email || ""),
         phone: String(phone || ""),
         address: String(address || ""),
@@ -512,13 +505,8 @@ app.post("/api/checkout/order", async (req, res) => {
         status: "PLACED",
         items: {
           create: items.map((it) => {
-            const key = String(it.productId);
-            const p = products.find((x) => x.id === key || x.slug === key);
-            return {
-              productId: p.id,
-              quantity: Number(it.quantity || 1),
-              price: p.price,
-            };
+            const p = products.find((x) => x.id === it.productId || x.slug === it.productId);
+            return { productId: p.id, quantity: Number(it.quantity || 1), price: p.price };
           }),
         },
       },
@@ -540,8 +528,7 @@ app.post("/api/checkout/order", async (req, res) => {
     });
   } catch (e) {
     console.error("checkout create failed", e?.message || e);
-    const msg = e?.error?.description || e?.message || "checkout create failed";
-    res.status(500).json({ ok: false, error: msg });
+    res.status(500).json({ ok: false, error: e?.message || "checkout create failed" });
   }
 });
 
