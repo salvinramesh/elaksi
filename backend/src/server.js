@@ -611,15 +611,22 @@ app.get("/api/orders/:id", async (req, res) => {
   res.json(o);
 });
 
+// ✅ User’s own orders list (alias kept for back-compat with frontend)
+app.get("/api/my/orders", requireAuth, async (req, res) => {
+  const rows = await prisma.order.findMany({
+    where: { userId: req.userId },
+    orderBy: { createdAt: "desc" },
+    include: { items: { include: { product: true } } },
+  });
+  res.json(rows);
+});
 
-// User’s own orders list
+// (Also keep /api/orders for user list if other clients rely on it)
 app.get("/api/orders", requireAuth, async (req, res) => {
   const rows = await prisma.order.findMany({
     where: { userId: req.userId },
     orderBy: { createdAt: "desc" },
-    include: {
-      items: { include: { product: true } },
-    },
+    include: { items: { include: { product: true } } },
   });
   res.json(rows);
 });
