@@ -1,6 +1,7 @@
+// src/pages/Admin.jsx
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Pencil, Trash2, Upload, LogOut, Shield } from 'lucide-react'
+import { Pencil, Trash2, Upload, LogOut, Shield, Truck, PackageCheck } from 'lucide-react'
 import { INR } from '../utils'
 
 const ADMIN_TOKEN_KEY = 'elaksi_admin_token'
@@ -38,6 +39,7 @@ export default function Admin() {
 
   const [collections, setCollections] = useState([])
   const [products, setProducts] = useState([])
+  const [orders, setOrders] = useState([]) // <-- NEW
   const [form, setForm] = useState({})
   const [tab, setTab] = useState('products')
   const [uploadPreview, setUploadPreview] = useState('')
@@ -108,10 +110,30 @@ export default function Admin() {
         }))
         setProducts(normalized)
       })
+
+    // NEW: load recent orders for admin
+    fetch('/api/admin/orders', { headers: { 'x-admin-token': storedToken } })
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setOrders)
+      .catch(() => {})
   }
   useEffect(() => {
     if (loggedIn) reload()
   }, [loggedIn])
+
+  // Optional: light polling so you notice new payments while on admin
+  useEffect(() => {
+    if (!loggedIn) return
+    const t = setInterval(() => {
+      if (tab === 'orders') {
+        fetch('/api/admin/orders', { headers: { 'x-admin-token': storedToken } })
+          .then((r) => (r.ok ? r.json() : []))
+          .then(setOrders)
+          .catch(() => {})
+      }
+    }, 30000)
+    return () => clearInterval(t)
+  }, [loggedIn, tab, storedToken])
 
   function normalizeProductBody(f) {
     const body = {
@@ -257,6 +279,24 @@ export default function Admin() {
     alert('Image uploaded')
   }
 
+  // ------- Orders actions -------
+  async function markShipped(id) {
+    const r = await fetch(`/api/orders/${id}/ship`, {
+      method: 'POST',
+      headers: { 'x-admin-token': storedToken },
+    })
+    if (!r.ok) return alert('Failed to mark shipped')
+    reload()
+  }
+  async function markDelivered(id) {
+    const r = await fetch(`/api/orders/${id}/deliver`, {
+      method: 'POST',
+      headers: { 'x-admin-token': storedToken },
+    })
+    if (!r.ok) return alert('Failed to mark delivered')
+    reload()
+  }
+
   return !loggedIn ? (
     <div className="min-h-screen grid place-items-center bg-amber-50">
       <div className="card p-6 w-full max-w-md">
@@ -300,11 +340,17 @@ export default function Admin() {
           >
             Products
           </button>
-          <button
+        <button
             className={'btn ' + (tab === 'collections' ? 'btn-primary' : 'btn-outline')}
             onClick={() => setTab('collections')}
           >
             Collections
+          </button>
+          <button
+            className={'btn ' + (tab === 'orders' ? 'btn-primary' : 'btn-outline')}
+            onClick={() => setTab('orders')}
+          >
+            Orders
           </button>
         </div>
 
@@ -551,6 +597,51 @@ export default function Admin() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {tab === 'orders' && (
+          <div className="mt-4 card p-3">
+            {orders.length === 0 ? (
+              <div className="text-stone-600">No orders yet.</div>
+            ) : (
+              <div className="space-y-3">
+                {orders.map((o) => (
+                  <div key={o.id} className="rounded-xl border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="font-medium">Order #{o.id}</div>
+                        <div className="text-xs text-stone-500">
+                          {new Date(o.createdAt).toLocaleString()} • {o.user?.email || o.email || 'Guest'}
+                        </div>
+                      </div>
+                      <div className="font-semibold">{INR.format(o.total / 100)}</div>
+                    </div>
+
+                    <div className="mt-2 text-sm">
+                      <span className="badge">{o.status}</span>
+                    </div>
+
+                    <ul className="mt-2 text-sm text-stone-700 space-y-1">
+                      {o.items.map((it) => (
+                        <li key={it.id}>
+                          {it.product?.name || it.productId} × {it.quantity} — {INR.format((it.price * it.quantity) / 100)}
+                        </li>
+                      ))}
+                    </ul>
+
+                    <div className="mt-3 flex gap-2">
+                      <button className="btn btn-outline" onClick={() => markShipped(o.id)}>
+                        <Truck className="h-4 w-4" /> Mark shipped
+                      </button>
+                      <button className="btn" onClick={() => markDelivered(o.id)}>
+                        <PackageCheck className="h-4 w-4" /> Mark delivered
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </main>

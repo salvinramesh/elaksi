@@ -360,17 +360,13 @@ app.put("/api/products/:id", requireAdmin, async (req, res) => {
   res.json(normalizeProductRow(row));
 });
 
-/** DELETE product
- *  - Normal delete: blocks with 409 if product is referenced by orders
- *  - Force delete (?force=1): removes ProductImage + OrderItem rows, then deletes Product (for test cleanup)
- */
+/** DELETE product */
 app.delete("/api/products/:id", requireAdmin, async (req, res) => {
   const id = String(req.params.id);
   const force = String(req.query.force || "") === "1";
 
   try {
     if (!force) {
-      // Guard: if referenced by orders, block
       const orderItemCount = await prisma.orderItem.count({ where: { productId: id } });
       if (orderItemCount > 0) {
         return res.status(409).json({
@@ -380,16 +376,14 @@ app.delete("/api/products/:id", requireAdmin, async (req, res) => {
         });
       }
 
-      // remove images first (FK)
       await prisma.productImage.deleteMany({ where: { productId: id } });
       await prisma.product.delete({ where: { id } });
       return res.json({ ok: true, forced: false });
     }
 
-    // Force delete: transactionally clean up dependents
     await prisma.$transaction(async (tx) => {
       await tx.productImage.deleteMany({ where: { productId: id } });
-      await tx.orderItem.deleteMany({ where: { productId: id } }); // ⚠ removes order lines
+      await tx.orderItem.deleteMany({ where: { productId: id } });
       await tx.product.delete({ where: { id } });
     });
 
@@ -416,7 +410,6 @@ app.post("/api/upload", requireAdmin, uploadAny.any(), (req, res) => {
   if (!file && req.file) file = req.file;
   if (!file) return res.status(400).json({ error: "file required" });
 
-  // Always return PUBLIC path (works in storefront and admin)
   const url = `/uploads/${file.filename}`;
   res.json({ ok: true, url });
 });
@@ -435,13 +428,12 @@ app.post("/api/products/:id/images", requireAdmin, uploadAny.any(), async (req, 
 
   const created = [];
   for (const f of files) {
-    const url = `/uploads/${f.filename}`; // store public path
+    const url = `/uploads/${f.filename}`;
     const row = await prisma.productImage.create({
       data: { productId: pid, url, position: startPos++ },
     });
     created.push(row);
   }
-  // normalize on the way out too (future-proof)
   res.json({ ok: true, images: created.map((im) => ({ ...im, url: toPublicUploadUrl(im.url) })) });
 });
 
@@ -463,8 +455,10 @@ app.get("/api/razorpay/key", (_req, res) => {
   res.json({ ok: true, keyId: process.env.RAZORPAY_KEY_ID });
 });
 
-// Orders & Checkout
-app.post("/api/checkout/order", requireAuth, async (req, res) => {
+/* ---------------------------
+   Orders & Checkout
+---------------------------- */
+app.post("/api/checkout/order", async (req, res) => {
   try {
     if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
       return res.status(500).json({ ok: false, error: "Razorpay keys not configured" });
@@ -475,14 +469,19 @@ app.post("/api/checkout/order", requireAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: "No items" });
     }
 
+    const uid = tryGetUserId(req); // may be null if you allow guest checkout
+
     const idsOrSlugs = items.map((i) => String(i.productId));
     const products = await prisma.product.findMany({
-      where: { OR: [{ id: { in: idsOrSlugs } }, { slug: { in: idsOrSlugs } }] },
+      where: {
+        OR: [{ id: { in: idsOrSlugs } }, { slug: { in: idsOrSlugs } }],
+      },
     });
 
     let total = 0;
     for (const it of items) {
-      const p = products.find((x) => x.id === it.productId || x.slug === it.productId);
+      const key = String(it.productId);
+      const p = products.find((x) => x.id === key || x.slug === key);
       if (!p) return res.status(400).json({ ok: false, error: "Invalid product" });
       const qty = Number(it.quantity || 1);
       if (p.inventory < qty) {
@@ -497,7 +496,7 @@ app.post("/api/checkout/order", requireAuth, async (req, res) => {
 
     const order = await prisma.order.create({
       data: {
-        userId: req.userId, // ✅ enforced
+        userId: uid || null,
         email: String(email || ""),
         phone: String(phone || ""),
         address: String(address || ""),
@@ -505,8 +504,13 @@ app.post("/api/checkout/order", requireAuth, async (req, res) => {
         status: "PLACED",
         items: {
           create: items.map((it) => {
-            const p = products.find((x) => x.id === it.productId || x.slug === it.productId);
-            return { productId: p.id, quantity: Number(it.quantity || 1), price: p.price };
+            const key = String(it.productId);
+            const p = products.find((x) => x.id === key || x.slug === key);
+            return {
+              productId: p.id,
+              quantity: Number(it.quantity || 1),
+              price: p.price,
+            };
           }),
         },
       },
@@ -528,7 +532,8 @@ app.post("/api/checkout/order", requireAuth, async (req, res) => {
     });
   } catch (e) {
     console.error("checkout create failed", e?.message || e);
-    res.status(500).json({ ok: false, error: e?.message || "checkout create failed" });
+    const msg = e?.error?.description || e?.message || "checkout create failed";
+    res.status(500).json({ ok: false, error: msg });
   }
 });
 
@@ -593,15 +598,47 @@ app.post("/api/checkout/verify", async (req, res) => {
 });
 
 /* ---------------------------
-   Order details & status changes
+   Order details, listings & status changes
 ---------------------------- */
+
+// Single order (used by OrderPlaced page)
 app.get("/api/orders/:id", async (req, res) => {
   const o = await prisma.order.findUnique({
     where: { id: req.params.id },
-    include: { items: true },
+    include: {
+      items: {
+        include: { product: true },
+      },
+      user: true,
+    },
   });
   if (!o) return res.status(404).json({ error: "Not found" });
   res.json(o);
+});
+
+// User’s own orders list
+app.get("/api/orders", requireAuth, async (req, res) => {
+  const rows = await prisma.order.findMany({
+    where: { userId: req.userId },
+    orderBy: { createdAt: "desc" },
+    include: {
+      items: { include: { product: true } },
+    },
+  });
+  res.json(rows);
+});
+
+// Admin: recent orders
+app.get("/api/admin/orders", requireAdmin, async (_req, res) => {
+  const rows = await prisma.order.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 200,
+    include: {
+      user: true,
+      items: { include: { product: true } },
+    },
+  });
+  res.json(rows);
 });
 
 app.post("/api/orders/:id/ship", requireAdmin, async (req, res) => {
