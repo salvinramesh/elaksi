@@ -437,6 +437,33 @@ app.post("/api/products/:id/images", requireAdmin, uploadAny.any(), async (req, 
   res.json({ ok: true, images: created.map((im) => ({ ...im, url: toPublicUploadUrl(im.url) })) });
 });
 
+// NEW: Add external image URLs (e.g., Instagram) without uploading files
+app.post("/api/products/:id/images/url", requireAdmin, async (req, res) => {
+  const pid = String(req.params.id);
+  const { urls } = req.body || {};
+  if (!Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ error: "urls[] required" });
+  }
+
+  const existing = await prisma.productImage.findMany({
+    where: { productId: pid },
+    orderBy: { position: "desc" },
+    take: 1,
+  });
+  let startPos = existing.length ? existing[0].position + 1 : 0;
+
+  const created = [];
+  for (const raw of urls) {
+    const u = String(raw || "").trim();
+    if (!u) continue;
+    const row = await prisma.productImage.create({
+      data: { productId: pid, url: u, position: startPos++ },
+    });
+    created.push(row);
+  }
+  res.json({ ok: true, images: created });
+});
+
 app.delete("/api/products/:pid/images/:imgId", requireAdmin, async (req, res) => {
   await prisma.productImage.delete({ where: { id: String(req.params.imgId) } });
   res.json({ ok: true });

@@ -1,7 +1,7 @@
 // src/pages/Admin.jsx
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Pencil, Trash2, Upload, LogOut, Shield, Truck, PackageCheck } from 'lucide-react'
+import { Pencil, Trash2, Upload, LogOut, Shield, Truck, PackageCheck, Link as LinkIcon } from 'lucide-react'
 import { INR } from '../utils'
 
 const ADMIN_TOKEN_KEY = 'elaksi_admin_token'
@@ -10,7 +10,6 @@ const ADMIN_TOKEN_KEY = 'elaksi_admin_token'
 function fixUrl(u) {
   if (!u) return ''
   try {
-    // only rewrite same-origin app-relative paths
     if (u.startsWith('/api/uploads/')) return u.replace(/^\/api\//, '/')
     return u
   } catch {
@@ -39,10 +38,11 @@ export default function Admin() {
 
   const [collections, setCollections] = useState([])
   const [products, setProducts] = useState([])
-  const [orders, setOrders] = useState([]) // <-- NEW
+  const [orders, setOrders] = useState([])
   const [form, setForm] = useState({})
   const [tab, setTab] = useState('products')
   const [uploadPreview, setUploadPreview] = useState('')
+  const [urlText, setUrlText] = useState('') // NEW: multi-URL textarea
 
   useEffect(() => {
     async function verify() {
@@ -102,7 +102,6 @@ export default function Admin() {
     fetch('/api/products')
       .then((r) => r.json())
       .then((rows) => {
-        // normalize any legacy image URLs on load so list thumbnails work
         const normalized = rows.map((p) => ({
           ...p,
           imageUrl: fixUrl(p.imageUrl),
@@ -111,7 +110,6 @@ export default function Admin() {
         setProducts(normalized)
       })
 
-    // NEW: load recent orders for admin
     fetch('/api/admin/orders', { headers: { 'x-admin-token': storedToken } })
       .then((r) => (r.ok ? r.json() : []))
       .then(setOrders)
@@ -121,7 +119,7 @@ export default function Admin() {
     if (loggedIn) reload()
   }, [loggedIn])
 
-  // Optional: light polling so you notice new payments while on admin
+  // Light polling on Orders tab
   useEffect(() => {
     if (!loggedIn) return
     const t = setInterval(() => {
@@ -149,9 +147,8 @@ export default function Admin() {
           ? f.compareAt
           : Math.round(parseFloat(f.compareAt || '0') * 100)
         : null,
-      imageUrl: fixUrl(f.imageUrl || ''), // ensure /uploads/ form
+      imageUrl: fixUrl(f.imageUrl || ''),
       inventory: parseInt(f.inventory || 0, 10),
-      // send tags as array; backend accepts tags or tagsCsv
       tags: Array.isArray(f.tags)
         ? f.tags
         : String(f.tags || '')
@@ -192,7 +189,6 @@ export default function Admin() {
 
   async function deleteProduct(id) {
     if (!confirm('Delete product?')) return
-    // try a normal delete first
     let res = await fetch('/api/products/' + id, {
       method: 'DELETE',
       headers: { 'x-admin-token': storedToken },
@@ -261,7 +257,6 @@ export default function Admin() {
 
   async function uploadImage(file) {
     const fd = new FormData()
-    // backend accepts any field name; use "file"
     fd.append('file', file)
     const res = await fetch('/api/upload', {
       method: 'POST',
@@ -279,7 +274,30 @@ export default function Admin() {
     alert('Image uploaded')
   }
 
-  // ------- Orders actions -------
+  // Add multiple external image URLs
+  async function addUrlImages() {
+    const raw = String(urlText || '').trim()
+    if (!raw) return
+    if (!form.id) return alert('Save product first, then add images')
+    const urls = raw
+      .split(/\n|,/)
+      .map((u) => u.trim())
+      .filter(Boolean)
+    if (!urls.length) return
+    const res = await fetch(`/api/products/${form.id}/images/url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-token': storedToken },
+      body: JSON.stringify({ urls }),
+    })
+    if (!res.ok) return alert('Add URL images failed: ' + res.status)
+    alert('Images added from URLs')
+    setUrlText('')
+    const fresh = await fetch('/api/products/id/' + form.id).then((r) => r.json())
+    fresh.images = (fresh.images || []).map((im) => ({ ...im, url: fixUrl(im.url) }))
+    setForm((prev) => ({ ...prev, images: fresh.images }))
+  }
+
+  // Orders actions
   async function markShipped(id) {
     const r = await fetch(`/api/orders/${id}/ship`, {
       method: 'POST',
@@ -340,7 +358,7 @@ export default function Admin() {
           >
             Products
           </button>
-        <button
+          <button
             className={'btn ' + (tab === 'collections' ? 'btn-primary' : 'btn-outline')}
             onClick={() => setTab('collections')}
           >
@@ -411,7 +429,7 @@ export default function Admin() {
                 placeholder="Description"
                 value={form.description || ''}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              ></textarea>
+              />
               <div className="grid grid-cols-2 gap-2">
                 <input
                   className="input"
@@ -454,6 +472,7 @@ export default function Admin() {
                 onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))}
               />
 
+              {/* Cover image by upload or URL */}
               <input
                 className="input"
                 placeholder="Cover Image URL"
@@ -465,7 +484,7 @@ export default function Admin() {
                   }))
                 }
               />
-              <div>
+              <div className="flex items-center gap-2">
                 <label className="btn btn-outline">
                   <Upload className="h-4 w-4" /> Upload Cover
                   <input
@@ -475,12 +494,31 @@ export default function Admin() {
                   />
                 </label>
                 {uploadPreview && (
-                  <img src={fixUrl(uploadPreview)} className="mt-2 h-20 rounded object-cover" alt="" />
+                  <img src={fixUrl(uploadPreview)} className="h-10 w-10 rounded object-cover border" alt="" />
                 )}
               </div>
 
-              <div className="mt-2">
-                <label className="btn btn-outline mr-2">
+              {/* NEW: Add external image URLs (one per line or comma-separated) */}
+              <div className="mt-3">
+                <div className="text-sm font-medium flex items-center gap-2">
+                  <LinkIcon className="h-4 w-4" /> Add image URLs (Instagram, CDN, etc.)
+                </div>
+                <textarea
+                  className="input mt-1"
+                  rows={3}
+                  placeholder={`https://instagram.fxyz1-1.fna.cdninstagram.com/...\nhttps://example.com/image2.jpg`}
+                  value={urlText}
+                  onChange={(e) => setUrlText(e.target.value)}
+                />
+                <button className="btn btn-outline mt-2" onClick={addUrlImages} disabled={!form.id}>
+                  Attach URLs to product
+                </button>
+              </div>
+
+              {/* Gallery management */}
+              <div className="mt-3">
+                <div className="text-sm font-semibold">Gallery</div>
+                <label className="btn btn-outline mr-2 mt-2 inline-flex">
                   <Upload className="h-4 w-4" /> Upload Images
                   <input
                     type="file"
@@ -499,7 +537,6 @@ export default function Admin() {
                       if (!res.ok) return alert('Upload failed: ' + res.status)
                       alert('Images uploaded')
                       const fresh = await fetch('/api/products/id/' + form.id).then((r) => r.json())
-                      // normalize URLs coming back
                       fresh.images = (fresh.images || []).map((im) => ({ ...im, url: fixUrl(im.url) }))
                       setForm((prev) => ({ ...prev, images: fresh.images }))
                     }}
