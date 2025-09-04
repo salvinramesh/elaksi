@@ -437,36 +437,114 @@ app.post("/api/products/:id/images", requireAdmin, uploadAny.any(), async (req, 
   res.json({ ok: true, images: created.map((im) => ({ ...im, url: toPublicUploadUrl(im.url) })) });
 });
 
-// NEW: Add external image URLs (e.g., Instagram) without uploading files
-app.post("/api/products/:id/images/url", requireAdmin, async (req, res) => {
-  const pid = String(req.params.id);
-  const { urls } = req.body || {};
-  if (!Array.isArray(urls) || urls.length === 0) {
-    return res.status(400).json({ error: "urls[] required" });
-  }
-
-  const existing = await prisma.productImage.findMany({
-    where: { productId: pid },
-    orderBy: { position: "desc" },
-    take: 1,
-  });
-  let startPos = existing.length ? existing[0].position + 1 : 0;
-
-  const created = [];
-  for (const raw of urls) {
-    const u = String(raw || "").trim();
-    if (!u) continue;
-    const row = await prisma.productImage.create({
-      data: { productId: pid, url: u, position: startPos++ },
-    });
-    created.push(row);
-  }
-  res.json({ ok: true, images: created });
-});
-
 app.delete("/api/products/:pid/images/:imgId", requireAdmin, async (req, res) => {
   await prisma.productImage.delete({ where: { id: String(req.params.imgId) } });
   res.json({ ok: true });
+});
+
+/* ---------------------------
+   NEW: Add images by external URL (downloads + caches)
+---------------------------- */
+async function fetchAsBuffer(url) {
+  const r = await fetch(url, {
+    redirect: "follow",
+    headers: {
+      // A real UA helps some CDNs (including instagram CDNs) return assets
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+      accept:
+        "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    },
+  });
+  if (!r.ok) throw new Error(`fetch failed ${r.status}`);
+  const ct = r.headers.get("content-type") || "";
+  const buf = Buffer.from(await r.arrayBuffer());
+  return { buf, contentType: ct };
+}
+
+function pickExt(contentType, fallback = ".jpg") {
+  if (/image\/jpeg/i.test(contentType)) return ".jpg";
+  if (/image\/png/i.test(contentType)) return ".png";
+  if (/image\/webp/i.test(contentType)) return ".webp";
+  if (/image\/gif/i.test(contentType)) return ".gif";
+  return fallback;
+}
+
+async function saveBufferToUploads(buf, ext = ".jpg") {
+  const name = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}${ext}`;
+  const full = path.join(UPLOAD_DIR, name);
+  await fs.promises.writeFile(full, buf);
+  return `/uploads/${name}`;
+}
+
+// Scrape og:image from an HTML page
+async function scrapeOgImage(pageUrl) {
+  const r = await fetch(pageUrl, {
+    redirect: "follow",
+    headers: {
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+      accept: "text/html,application/xhtml+xml",
+    },
+  });
+  if (!r.ok) throw new Error(`page fetch failed ${r.status}`);
+  const html = await r.text();
+  const m =
+    html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+  return m ? m[1] : null;
+}
+
+app.post("/api/products/:id/images/url", requireAdmin, async (req, res) => {
+  try {
+    const pid = String(req.params.id);
+    const urls = Array.isArray(req.body?.urls)
+      ? req.body.urls.map((u) => String(u).trim()).filter(Boolean)
+      : [];
+    if (!urls.length) return res.status(400).json({ ok: false, error: "urls required" });
+
+    const existing = await prisma.productImage.findMany({
+      where: { productId: pid },
+      orderBy: { position: "desc" },
+      take: 1,
+    });
+    let position = existing.length ? existing[0].position + 1 : 0;
+
+    const created = [];
+
+    for (const u of urls) {
+      let imgUrl = u;
+
+      // If it's not obviously an image, try scraping og:image (e.g., Instagram post)
+      if (!/\.(jpg|jpeg|png|webp|gif)(\?|#|$)/i.test(u)) {
+        try {
+          const og = await scrapeOgImage(u);
+          if (og) imgUrl = og;
+        } catch (e) {
+          console.warn("og:image scrape failed for", u, e?.message || e);
+        }
+      }
+
+      try {
+        const { buf, contentType } = await fetchAsBuffer(imgUrl);
+        if (!/^image\//i.test(contentType)) throw new Error("not an image");
+        const ext = pickExt(contentType);
+        const localPath = await saveBufferToUploads(buf, ext);
+
+        const row = await prisma.productImage.create({
+          data: { productId: pid, url: localPath, position: position++ },
+        });
+        created.push(row);
+      } catch (e) {
+        console.warn("download failed for", imgUrl, e?.message || e);
+      }
+    }
+
+    res.json({ ok: true, count: created.length, images: created });
+  } catch (e) {
+    console.error("add url images failed", e?.message || e);
+    res.status(500).json({ ok: false, error: "add url images failed" });
+  }
 });
 
 /* ---------------------------
@@ -638,7 +716,7 @@ app.get("/api/orders/:id", async (req, res) => {
   res.json(o);
 });
 
-// ✅ User’s own orders list (alias kept for back-compat with frontend)
+// User’s own orders list (also exposed at /api/my/orders for back-compat)
 app.get("/api/my/orders", requireAuth, async (req, res) => {
   const rows = await prisma.order.findMany({
     where: { userId: req.userId },
@@ -647,8 +725,6 @@ app.get("/api/my/orders", requireAuth, async (req, res) => {
   });
   res.json(rows);
 });
-
-// (Also keep /api/orders for user list if other clients rely on it)
 app.get("/api/orders", requireAuth, async (req, res) => {
   const rows = await prisma.order.findMany({
     where: { userId: req.userId },
