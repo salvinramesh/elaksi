@@ -658,13 +658,14 @@ app.get("/api/orders", requireAuth, async (req, res) => {
   res.json(rows);
 });
 
-// Admin: recent orders
+// Admin: recent orders (updated to include user.addresses)
 app.get("/api/admin/orders", requireAdmin, async (_req, res) => {
   const rows = await prisma.order.findMany({
     orderBy: { createdAt: "desc" },
     take: 200,
     include: {
-      user: true,
+      // include user and their addresses so admin can view buyer address
+      user: { include: { addresses: { orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }] } } },
       items: { include: { product: true } },
     },
   });

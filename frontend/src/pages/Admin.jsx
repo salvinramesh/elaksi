@@ -1,7 +1,7 @@
 // src/pages/Admin.jsx
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Pencil, Trash2, Upload, LogOut, Shield, Truck, PackageCheck, Link as LinkIcon } from 'lucide-react'
+import { Pencil, Trash2, Upload, LogOut, Shield, Truck, PackageCheck } from 'lucide-react'
 import { INR } from '../utils'
 
 const ADMIN_TOKEN_KEY = 'elaksi_admin_token'
@@ -10,6 +10,7 @@ const ADMIN_TOKEN_KEY = 'elaksi_admin_token'
 function fixUrl(u) {
   if (!u) return ''
   try {
+    // only rewrite same-origin app-relative paths
     if (u.startsWith('/api/uploads/')) return u.replace(/^\/api\//, '/')
     return u
   } catch {
@@ -42,7 +43,6 @@ export default function Admin() {
   const [form, setForm] = useState({})
   const [tab, setTab] = useState('products')
   const [uploadPreview, setUploadPreview] = useState('')
-  const [urlText, setUrlText] = useState('') // NEW: multi-URL textarea
 
   useEffect(() => {
     async function verify() {
@@ -102,6 +102,7 @@ export default function Admin() {
     fetch('/api/products')
       .then((r) => r.json())
       .then((rows) => {
+        // normalize any legacy image URLs on load so list thumbnails work
         const normalized = rows.map((p) => ({
           ...p,
           imageUrl: fixUrl(p.imageUrl),
@@ -110,6 +111,7 @@ export default function Admin() {
         setProducts(normalized)
       })
 
+    // load recent orders for admin (includes user + addresses from backend)
     fetch('/api/admin/orders', { headers: { 'x-admin-token': storedToken } })
       .then((r) => (r.ok ? r.json() : []))
       .then(setOrders)
@@ -119,7 +121,7 @@ export default function Admin() {
     if (loggedIn) reload()
   }, [loggedIn])
 
-  // Light polling on Orders tab
+  // Optional: light polling so you notice new payments while on admin
   useEffect(() => {
     if (!loggedIn) return
     const t = setInterval(() => {
@@ -147,8 +149,9 @@ export default function Admin() {
           ? f.compareAt
           : Math.round(parseFloat(f.compareAt || '0') * 100)
         : null,
-      imageUrl: fixUrl(f.imageUrl || ''),
+      imageUrl: fixUrl(f.imageUrl || ''), // ensure /uploads/ form
       inventory: parseInt(f.inventory || 0, 10),
+      // send tags as array; backend accepts tags or tagsCsv
       tags: Array.isArray(f.tags)
         ? f.tags
         : String(f.tags || '')
@@ -189,6 +192,7 @@ export default function Admin() {
 
   async function deleteProduct(id) {
     if (!confirm('Delete product?')) return
+    // try a normal delete first
     let res = await fetch('/api/products/' + id, {
       method: 'DELETE',
       headers: { 'x-admin-token': storedToken },
@@ -257,6 +261,7 @@ export default function Admin() {
 
   async function uploadImage(file) {
     const fd = new FormData()
+    // backend accepts any field name; use "file"
     fd.append('file', file)
     const res = await fetch('/api/upload', {
       method: 'POST',
@@ -274,30 +279,7 @@ export default function Admin() {
     alert('Image uploaded')
   }
 
-  // Add multiple external image URLs
-  async function addUrlImages() {
-    const raw = String(urlText || '').trim()
-    if (!raw) return
-    if (!form.id) return alert('Save product first, then add images')
-    const urls = raw
-      .split(/\n|,/)
-      .map((u) => u.trim())
-      .filter(Boolean)
-    if (!urls.length) return
-    const res = await fetch(`/api/products/${form.id}/images/url`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-admin-token': storedToken },
-      body: JSON.stringify({ urls }),
-    })
-    if (!res.ok) return alert('Add URL images failed: ' + res.status)
-    alert('Images added from URLs')
-    setUrlText('')
-    const fresh = await fetch('/api/products/id/' + form.id).then((r) => r.json())
-    fresh.images = (fresh.images || []).map((im) => ({ ...im, url: fixUrl(im.url) }))
-    setForm((prev) => ({ ...prev, images: fresh.images }))
-  }
-
-  // Orders actions
+  // ------- Orders actions -------
   async function markShipped(id) {
     const r = await fetch(`/api/orders/${id}/ship`, {
       method: 'POST',
@@ -313,6 +295,19 @@ export default function Admin() {
     })
     if (!r.ok) return alert('Failed to mark delivered')
     reload()
+  }
+
+  // small helper to format an Address object
+  function renderAddressObj(a) {
+    if (!a) return null
+    return (
+      <div className="mt-2 text-sm text-stone-700">
+        <div><strong>{a.fullName}</strong> • {a.phone}</div>
+        <div>{a.line1}{a.line2 ? `, ${a.line2}` : ''}</div>
+        <div>{a.city} • {a.state} • {a.pincode}</div>
+        <div>{a.country}</div>
+      </div>
+    )
   }
 
   return !loggedIn ? (
@@ -429,7 +424,7 @@ export default function Admin() {
                 placeholder="Description"
                 value={form.description || ''}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              />
+              ></textarea>
               <div className="grid grid-cols-2 gap-2">
                 <input
                   className="input"
@@ -472,7 +467,6 @@ export default function Admin() {
                 onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))}
               />
 
-              {/* Cover image by upload or URL */}
               <input
                 className="input"
                 placeholder="Cover Image URL"
@@ -484,7 +478,7 @@ export default function Admin() {
                   }))
                 }
               />
-              <div className="flex items-center gap-2">
+              <div>
                 <label className="btn btn-outline">
                   <Upload className="h-4 w-4" /> Upload Cover
                   <input
@@ -494,31 +488,12 @@ export default function Admin() {
                   />
                 </label>
                 {uploadPreview && (
-                  <img src={fixUrl(uploadPreview)} className="h-10 w-10 rounded object-cover border" alt="" />
+                  <img src={fixUrl(uploadPreview)} className="mt-2 h-20 rounded object-cover" alt="" />
                 )}
               </div>
 
-              {/* NEW: Add external image URLs (one per line or comma-separated) */}
-              <div className="mt-3">
-                <div className="text-sm font-medium flex items-center gap-2">
-                  <LinkIcon className="h-4 w-4" /> Add image URLs (Instagram, CDN, etc.)
-                </div>
-                <textarea
-                  className="input mt-1"
-                  rows={3}
-                  placeholder={`https://instagram.fxyz1-1.fna.cdninstagram.com/...\nhttps://example.com/image2.jpg`}
-                  value={urlText}
-                  onChange={(e) => setUrlText(e.target.value)}
-                />
-                <button className="btn btn-outline mt-2" onClick={addUrlImages} disabled={!form.id}>
-                  Attach URLs to product
-                </button>
-              </div>
-
-              {/* Gallery management */}
-              <div className="mt-3">
-                <div className="text-sm font-semibold">Gallery</div>
-                <label className="btn btn-outline mr-2 mt-2 inline-flex">
+              <div className="mt-2">
+                <label className="btn btn-outline mr-2">
                   <Upload className="h-4 w-4" /> Upload Images
                   <input
                     type="file"
@@ -537,6 +512,7 @@ export default function Admin() {
                       if (!res.ok) return alert('Upload failed: ' + res.status)
                       alert('Images uploaded')
                       const fresh = await fetch('/api/products/id/' + form.id).then((r) => r.json())
+                      // normalize URLs coming back
                       fresh.images = (fresh.images || []).map((im) => ({ ...im, url: fixUrl(im.url) }))
                       setForm((prev) => ({ ...prev, images: fresh.images }))
                     }}
@@ -643,40 +619,61 @@ export default function Admin() {
               <div className="text-stone-600">No orders yet.</div>
             ) : (
               <div className="space-y-3">
-                {orders.map((o) => (
-                  <div key={o.id} className="rounded-xl border p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <div className="font-medium">Order #{o.id}</div>
-                        <div className="text-xs text-stone-500">
-                          {new Date(o.createdAt).toLocaleString()} • {o.user?.email || o.email || 'Guest'}
+                {orders.map((o) => {
+                  // choose the best address to show:
+                  // prefer the user's default saved address if present; otherwise use the order.address string
+                  const savedAddr = o.user?.addresses && o.user.addresses.length ? o.user.addresses[0] : null
+                  return (
+                    <div key={o.id} className="rounded-xl border p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="font-medium">Order #{o.id}</div>
+                          <div className="text-xs text-stone-500">
+                            {new Date(o.createdAt).toLocaleString()} • {o.user?.email || o.email || 'Guest'}
+                          </div>
                         </div>
+                        <div className="font-semibold">{INR.format(o.total / 100)}</div>
                       </div>
-                      <div className="font-semibold">{INR.format(o.total / 100)}</div>
-                    </div>
 
-                    <div className="mt-2 text-sm">
-                      <span className="badge">{o.status}</span>
-                    </div>
+                      <div className="mt-2 text-sm">
+                        <span className="badge">{o.status}</span>
+                      </div>
 
-                    <ul className="mt-2 text-sm text-stone-700 space-y-1">
-                      {o.items.map((it) => (
-                        <li key={it.id}>
-                          {it.product?.name || it.productId} × {it.quantity} — {INR.format((it.price * it.quantity) / 100)}
-                        </li>
-                      ))}
-                    </ul>
+                      <ul className="mt-2 text-sm text-stone-700 space-y-1">
+                        {o.items.map((it) => (
+                          <li key={it.id}>
+                            {it.product?.name || it.productId} × {it.quantity} — {INR.format((it.price * it.quantity) / 100)}
+                          </li>
+                        ))}
+                      </ul>
 
-                    <div className="mt-3 flex gap-2">
-                      <button className="btn btn-outline" onClick={() => markShipped(o.id)}>
-                        <Truck className="h-4 w-4" /> Mark shipped
-                      </button>
-                      <button className="btn" onClick={() => markDelivered(o.id)}>
-                        <PackageCheck className="h-4 w-4" /> Mark delivered
-                      </button>
+                      {/* show saved address object if available */}
+                      {savedAddr ? (
+                        <div className="mt-3">
+                          <div className="text-xs text-stone-500">Buyer address (saved):</div>
+                          {renderAddressObj(savedAddr)}
+                        </div>
+                      ) : (
+                        // fallback to the freeform string address from the order row
+                        o.address && (
+                          <div className="mt-3 text-sm text-stone-700">
+                            <div className="text-xs text-stone-500">Address (as provided during checkout):</div>
+                            <div>{o.address}</div>
+                          </div>
+                        )
+                      )}
+
+                      <div className="mt-3 flex gap-2">
+                        <button className="btn btn-outline" onClick={() => markShipped(o.id)}>
+                          <Truck className="h-4 w-4" /> Mark shipped
+                        </button>
+                        <button className="btn" onClick={() => markDelivered(o.id)}>
+                          <PackageCheck className="h-4 w-4" /> Mark delivered
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
