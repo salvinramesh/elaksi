@@ -143,11 +143,19 @@ export default function Layout() {
       </main>
 
       {/* Footer */}
-      <footer className="mt-12 border-t bg-white/60">
-        <div className="container py-6 text-sm text-stone-600">
-          <p>© {new Date().getFullYear()} ELAKSI ATELIER. All rights reserved.</p>
-        </div>
-      </footer>
+<footer className="mt-12 border-t bg-white/60">
+  <div className="container py-6 text-sm text-stone-600 flex flex-col md:flex-row justify-between items-center gap-4">
+    <p>© {new Date().getFullYear()} ELAKSI ATELIER. All rights reserved.</p>
+
+    <div className="flex flex-wrap gap-4">
+      <Link to="/cancellation" className="hover:underline">Cancellation & Refunds</Link>
+      <Link to="/terms" className="hover:underline">Terms and Conditions</Link>
+      <Link to="/shipping" className="hover:underline">Shipping</Link>
+      <Link to="/privacy" className="hover:underline">Privacy</Link>
+      <Link to="/contact" className="hover:underline">Contact Us</Link>
+    </div>
+  </div>
+</footer>
 
       {/* Cart Drawer */}
       <CartDrawer

@@ -12,6 +12,11 @@ import Admin from './pages/Admin.jsx';
 import Register from './pages/Register.jsx';
 import Account from './pages/Account.jsx';
 import Login from './pages/Login.jsx';
+import Cancellation from './pages/Cancellation.jsx';
+import Terms from './pages/Terms.jsx';
+import Shipping from './pages/Shipping.jsx';
+import Privacy from './pages/Privacy.jsx';
+import Contact from './pages/Contact.jsx';
 
 const CART_KEY = 'elaksi_cart';
 const SESSION_CLEAR_FLAG = 'cart:clear';
@@ -295,16 +300,31 @@ export default function App() {
           <Route path="/register" element={<Register />} />
           <Route path="/account" element={<Account />} />
           <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="/cancellation" element={<Cancellation />} />
+          <Route path="/terms" element={<Terms />} />
+          <Route path="/shipping" element={<Shipping />} />
+          <Route path="/privacy" element={<Privacy />} />
+          <Route path="/contact" element={<Contact />} />
         </Routes>
       </main>
 
-      <footer className="mt-12 border-t bg-white/60">
-        <div className="container py-6 text-sm text-stone-600">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p>© {new Date().getFullYear()} ELAKSI ATELIER. All rights reserved.</p>
-          </div>
-        </div>
-      </footer>
+      {/* Footer */}
+<footer className="mt-12 border-t bg-white/60">
+  <div className="container py-6 text-sm text-stone-600">
+    <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+      <p>© {new Date().getFullYear()} ELAKSI ATELIER. All rights reserved.</p>
+
+      <nav aria-label="Policy links" className="flex flex-wrap gap-3">
+        <Link to="/cancellation" className="hover:underline">Cancellation & Refunds</Link>
+        <Link to="/terms" className="hover:underline">Terms and Conditions</Link>
+        <Link to="/shipping" className="hover:underline">Shipping</Link>
+        <Link to="/privacy" className="hover:underline">Privacy</Link>
+        <Link to="/contact" className="hover:underline">Contact Us</Link>
+      </nav>
+    </div>
+  </div>
+</footer>
+
 
       {/* Cart drawer */}
       <CartDrawer
